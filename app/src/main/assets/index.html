@@ -386,6 +386,7 @@ let localConsecutiveErrors = 0;
 let localErrorTimer = null;
 let ytLoading = false;
 let bgThumbBusy = false;
+let dlStatusTimer = null;
 
 const sv = () => LS.s = JSON.stringify(S);
 
@@ -521,6 +522,18 @@ async function getSavedVideos() {
       const res = window.Android.getVideos();
       const list = typeof res === 'string' ? JSON.parse(res || '[]') : (res || []);
       if (Array.isArray(list)) {
+        list.forEach(item => {
+          const id = typeof item === 'string' ? item : (item.id || item.videoId || '');
+          if (id && S[id]) {
+            S[id].d = 1;
+            delete S[id].q;
+            if (typeof window.Android.updateViews === 'function') {
+              try { window.Android.updateViews(id, S[id].v || 0); } catch (e) {}
+            }
+          }
+        });
+        sv();
+
         return list.map(item => {
           if (typeof item === 'string') {
             return {
@@ -771,6 +784,62 @@ function renderSavedListUI(savedVideos) {
   }
 }
 
+function renderDownloadStatusUI() {
+  if (!window.Android || typeof window.Android.getDownloadStatus !== 'function') return;
+
+  try {
+    const raw = window.Android.getDownloadStatus();
+    const data = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+
+    const curEl = $('#dlCurrent');
+    if (curEl) {
+      if (data.current) {
+        const pct = (data.current.progress !== undefined && data.current.progress >= 0)
+          ? ` (${data.current.progress}%)`
+          : '';
+        const mb = data.current.bytes
+          ? ` · ${(data.current.bytes / 1048576).toFixed(1)} MB`
+          : '';
+        curEl.innerHTML = `<span style="color:#0f0">▶ Descargando:</span> <b style="color:#fff">${dec(data.current.title || data.current.id)}</b>${pct}${mb}`;
+      } else {
+        curEl.innerHTML = '<span style="color:#888">Estado: Inactivo</span>';
+      }
+    }
+
+    const qEl = $('#dlQueue');
+    if (qEl) {
+      const q = data.queue || [];
+      if (q.length > 0) {
+        const titles = q.slice(0, 3).map(x => dec(x.title || x.id)).join(', ');
+        const extra = q.length > 3 ? ` (+${q.length - 3})` : '';
+        qEl.innerHTML = `<span>En cola (${q.length}):</span> ${titles}${extra}`;
+      } else {
+        qEl.innerHTML = '<span>En cola:</span> Ninguno';
+      }
+    }
+
+    const hEl = $('#dlHistory');
+    if (hEl) {
+      const hist = data.history || [];
+      if (!hist.length) {
+        hEl.innerHTML = '<div style="color:#666;font-size:10px;padding:3px 0">Sin registros recientes</div>';
+      } else {
+        hEl.innerHTML = hist.slice(0, 10).map(item => {
+          const isOk = item.status === 'OK';
+          const badge = isOk
+            ? '<span style="background:#080;color:#fff;padding:1px 5px;border-radius:4px;font-size:9px">OK</span>'
+            : '<span style="background:#b00;color:#fff;padding:1px 5px;border-radius:4px;font-size:9px">Falló</span>';
+          const reason = item.reason ? `<span style="color:#aaa;font-size:10px"> (${item.reason})</span>` : '';
+          return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid #2a2a2a;gap:6px">` +
+            `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#ddd">${dec(item.title || item.id)}</span>` +
+            `<span style="flex-shrink:0">${badge}${reason}</span>` +
+          `</div>`;
+        }).join('');
+      }
+    }
+  } catch (e) {}
+}
+
 // Panel de configuración
 async function openCfg() {
   if (document.fullscreenElement && document.exitFullscreen) {
@@ -788,6 +857,17 @@ async function openCfg() {
     '</label>'
   );
 
+  const dlSection = (window.Android && typeof window.Android.getDownloadStatus === 'function') ? (
+    '<hr style="border:0;border-top:1px solid #333;margin:12px 0">' +
+    '<p style="margin:4px 0;font-size:12px;color:#f33">DESCARGAS</p>' +
+    '<div id="dlStatusBox" style="font-size:11px;background:#222;padding:8px;border-radius:8px;margin-bottom:8px">' +
+    '<div id="dlCurrent"></div>' +
+    '<div id="dlQueue" style="margin-top:6px;color:#aaa"></div>' +
+    '<div style="margin-top:8px;border-top:1px solid #333;padding-top:6px;font-weight:bold;color:#ccc">Últimas 10 descargas:</div>' +
+    '<div id="dlHistory" style="margin-top:4px;max-height:140px;overflow-y:auto"></div>' +
+    '</div>'
+  ) : '';
+
   b.innerHTML = '<p style="margin-top:0;font-size:13px;color:#f33">CONFIGURACIÓN</p>' +
     '<p style="margin:8px 0 4px">API key de YouTube:</p>' +
     '<input id="ak" style="margin-bottom:6px" autocomplete="off">' +
@@ -801,6 +881,7 @@ async function openCfg() {
     '<div style="display:flex;gap:6px">' +
     '<button id="dlts" style="flex:1">Guardar plantilla</button>' +
     '</div>' +
+    dlSection +
     '<hr style="border:0;border-top:1px solid #333;margin:12px 0">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
     '<span id="saveCount">Guardados: ' + count + ' / 70</span>' +
@@ -818,6 +899,12 @@ async function openCfg() {
     $('#importRes').textContent = importMsg;
   }
   renderSavedListUI(savedVideos);
+
+  if (window.Android && typeof window.Android.getDownloadStatus === 'function') {
+    renderDownloadStatusUI();
+    clearInterval(dlStatusTimer);
+    dlStatusTimer = setInterval(renderDownloadStatusUI, 2000);
+  }
 
   $('#akp').onclick = async () => {
     try {
@@ -972,6 +1059,7 @@ async function openCfg() {
   }
 
   $('#cl').onclick = async () => {
+    clearInterval(dlStatusTimer);
     $('#cfg').style.display = 'none';
     try {
       if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
@@ -1130,6 +1218,9 @@ function view(id, t) {
     fav(id, t, null);
   }
   sv();
+  if (window.Android && typeof window.Android.updateViews === 'function') {
+    try { window.Android.updateViews(id, s.v); } catch (e) {}
+  }
 }
 
 function showStarPop(targetEl) {
