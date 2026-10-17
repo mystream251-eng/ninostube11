@@ -1,0 +1,6 @@
+{
+  "name": "NinosTube",
+  "description": "Reproductor de videos infantiles adaptado para tablet con modo offline y YouTube API",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
