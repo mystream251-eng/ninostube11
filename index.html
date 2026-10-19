@@ -26,18 +26,22 @@ html, body {
 }
 #L {
   position: relative;
-  flex: 7;
+  flex: 1;
   height: 100%;
   background: #000;
+  min-width: 0;
 }
 #R {
-  flex: 3;
+  width: 27vw;
+  min-width: 190px;
+  max-width: 320px;
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   background: #111;
   padding: 8px 6px;
   -webkit-overflow-scrolling: touch;
+  flex-shrink: 0;
 }
 #yt {
   width: 100%;
@@ -65,28 +69,29 @@ html, body {
 .hb {
   position: absolute;
   top: 10px;
-  width: 56px;
-  height: 56px;
+  width: 46px;
+  height: 46px;
   border-radius: 50%;
   background: rgba(0,0,0,0.6);
   color: #fff;
-  font-size: 26px;
+  font-size: 22px;
   display: grid;
   place-items: center;
   z-index: 20;
   cursor: pointer;
   border: 2px solid rgba(255,255,255,0.4);
   touch-action: manipulation;
-  transition: transform 0.2s, background 0.2s, border-color 0.2s;
+  transition: transform 0.15s ease, background 0.2s, border-color 0.2s;
 }
-.hb:active, .hb.h {
+.hb.h {
   background: rgba(255,0,0,0.85);
   border-color: #fff;
-  transform: scale(0.92);
+  transform: scale(1.4);
+  transition: transform 2s linear, background 0.2s;
 }
 #sb {
   position: absolute;
-  top: 76px;
+  top: 64px;
   left: 10px;
   right: 10px;
   display: none;
@@ -96,7 +101,7 @@ html, body {
 #q {
   flex: 1;
   font: inherit;
-  font-size: 16px;
+  font-size: 14px;
   padding: 10px 14px;
   border-radius: 10px;
   border: 2px solid #fff;
@@ -118,12 +123,12 @@ html, body {
 }
 .c {
   position: relative;
-  height: 80px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   background: #222;
   border-radius: 8px;
   overflow: hidden;
   display: flex;
+  flex-direction: column;
   cursor: pointer;
   border: 3px solid transparent;
   box-sizing: border-box;
@@ -132,16 +137,15 @@ html, body {
   border-color: #f33;
 }
 .c .i {
-  width: 80px;
-  min-width: 80px;
-  height: 80px;
+  width: 100%;
+  aspect-ratio: 1;
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
   flex-shrink: 0;
 }
 .c b {
-  padding: 6px 8px;
+  padding: 6px 6px;
   font-size: 11px;
   line-height: 1.25;
   color: #ddd;
@@ -149,7 +153,6 @@ html, body {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  align-self: center;
   word-break: break-word;
 }
 .c s {
@@ -324,6 +327,11 @@ const $ = s => document.querySelector(s), LS = localStorage;
 
 const DEFAULT_DL = 'https://apipy.ssyoutube-downloader.com/youtube/download?url=https://www.youtube.com/watch?v=ID&type=video&height=360';
 
+function getDownloadUrl(id) {
+  const template = LS.dl || DEFAULT_DL;
+  return template.replace(/\{id\}/gi, id).replace(/ID/g, id);
+}
+
 const SEEDS = [
   'canciones infantiles',
   'cocomelon',
@@ -345,7 +353,86 @@ const SEEDS = [
   'caricaturas clasicas'
 ];
 
-let K = LS.k || '';
+let rawKeys = LS.k || '';
+let apiKeys = parseKeys(rawKeys);
+let keyIndex = 0;
+let K = apiKeys[0] || '';
+
+let exhaustedKeys = {};
+try {
+  exhaustedKeys = JSON.parse(LS.bad_keys || '{}');
+} catch (e) {
+  exhaustedKeys = {};
+}
+let apiExhaustedUntil = parseInt(LS.api_exhausted || '0', 10) || 0;
+let quotaOffline = false;
+let testingKey = false;
+
+function parseKeys(str) {
+  if (!str) return [];
+  return str.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function updateKeys(newRaw) {
+  rawKeys = (newRaw || '').trim();
+  LS.k = rawKeys;
+  apiKeys = parseKeys(rawKeys);
+  if (keyIndex >= apiKeys.length) keyIndex = 0;
+  K = apiKeys[keyIndex] || '';
+}
+
+function getNextJaliscoResetTime(timestamp) {
+  const d = new Date(timestamp);
+  const reset = new Date(d);
+  reset.setUTCHours(7, 0, 0, 0); // 07:00 UTC = 01:00 Jalisco (UTC-6)
+  if (reset.getTime() <= timestamp) {
+    reset.setUTCDate(reset.getUTCDate() + 1);
+  }
+  return reset.getTime();
+}
+
+function markKeyExhausted(key) {
+  if (!key) return;
+  exhaustedKeys[key] = Date.now();
+  try {
+    localStorage.setItem('bad_keys', JSON.stringify(exhaustedKeys));
+  } catch (e) {}
+}
+
+function isKeyExhausted(key) {
+  const failedAt = exhaustedKeys[key];
+  if (!failedAt) return false;
+  const resetAt = getNextJaliscoResetTime(failedAt);
+  if (Date.now() >= resetAt) {
+    delete exhaustedKeys[key];
+    try {
+      localStorage.setItem('bad_keys', JSON.stringify(exhaustedKeys));
+    } catch (e) {}
+    return false;
+  }
+  return true;
+}
+
+function setApiExhaustedFlag() {
+  apiExhaustedUntil = Date.now() + 30 * 60 * 1000;
+  try {
+    localStorage.setItem('api_exhausted', String(apiExhaustedUntil));
+  } catch (e) {}
+}
+
+function isApiExhausted() {
+  if (apiExhaustedUntil && Date.now() < apiExhaustedUntil) {
+    return true;
+  }
+  if (apiExhaustedUntil && Date.now() >= apiExhaustedUntil) {
+    apiExhaustedUntil = 0;
+    try {
+      localStorage.removeItem('api_exhausted');
+    } catch (e) {}
+  }
+  return false;
+}
+
 let S = JSON.parse(LS.s || '{}');
 let items = [];
 let seen = new Set();
@@ -409,13 +496,17 @@ function loadYT() {
     if (!P) initYTPlayer();
     return;
   }
-  if (ytLoading) return;
+  if (!navigator.onLine) return;
+  if (document.getElementById('yt-script')) return;
   ytLoading = true;
-  const prevTag = document.querySelector('script[src*="youtube.com/iframe_api"]');
-  if (prevTag) prevTag.remove();
   const tag = document.createElement('script');
+  tag.id = 'yt-script';
   tag.src = 'https://www.youtube.com/iframe_api';
-  tag.onerror = () => { ytLoading = false; };
+  tag.onerror = () => {
+    ytLoading = false;
+    const s = document.getElementById('yt-script');
+    if (s) s.remove();
+  };
   document.head.appendChild(tag);
 }
 
@@ -423,6 +514,57 @@ window.onYouTubeIframeAPIReady = () => {
   ytLoading = false;
   initYTPlayer();
 };
+
+let ensurePlayingTimer = null;
+function ensurePlaying() {
+  clearTimeout(ensurePlayingTimer);
+  ensurePlayingTimer = setTimeout(() => {
+    if (P && typeof P.playVideo === 'function' && !off) {
+      try {
+        P.playVideo();
+      } catch (e) {}
+    }
+  }, 250);
+}
+
+function onState(e) {
+  const s = typeof e === 'object' && e !== null && 'data' in e ? e.data : e;
+  if (s === 1) {
+    consecutiveErrors = 0;
+    stuckSeconds = 0;
+  } else if (s === 0) {
+    next();
+  } else if (s === 2 || s === -1 || s === 5) {
+    ensurePlaying();
+  }
+}
+
+async function onErr(e) {
+  consecutiveErrors++;
+  if (consecutiveErrors >= 5) {
+    clearTimeout(errorTimer);
+    errorTimer = setTimeout(() => {
+      consecutiveErrors = 0;
+      next();
+    }, 3000);
+    return;
+  }
+  if (consecutiveErrors >= 3) {
+    const saved = await getSavedVideos().catch(() => []);
+    if (saved && saved.length > 0) {
+      await goOff();
+      return;
+    } else {
+      next();
+      return;
+    }
+  }
+  next();
+}
+
+function handleVideoError() {
+  onErr();
+}
 
 function initYTPlayer() {
   if (P || !window.YT || !window.YT.Player) return;
@@ -447,18 +589,8 @@ function initYTPlayer() {
           play(cur >= 0 ? cur : 0);
         }
       },
-      onError: () => handleVideoError(),
-      onStateChange: e => {
-        const s = e.data;
-        if (s === 1) {
-          consecutiveErrors = 0;
-          stuckSeconds = 0;
-        } else if (s === 0) {
-          next();
-        } else if (s === 2 || s === -1 || s === 5) {
-          ensurePlaying();
-        }
-      }
+      onError: e => onErr(e),
+      onStateChange: e => onState(e)
     }
   });
 }
@@ -683,7 +815,10 @@ $('#q').onkeydown = async e => {
   if (!v) return;
   $('#sb').style.display = 'none';
   e.target.value = '';
-  if (!K) return;
+  if (!apiKeys.length) {
+    if (!off) await goOff();
+    return;
+  }
   apiCooldownUntil = 0;
   Q = v;
   tok = '';
@@ -768,7 +903,9 @@ function renderSavedListUI(savedVideos) {
           await dbDelete(v.id);
         }
         if (S[v.id]) {
-          S[v.id].d = 0;
+          delete S[v.id].d;
+          delete S[v.id].l;
+          delete S[v.id].q;
           sv();
         }
         savedVideos = savedVideos.filter(x => x.id !== v.id);
@@ -869,11 +1006,11 @@ async function openCfg() {
   ) : '';
 
   b.innerHTML = '<p style="margin-top:0;font-size:13px;color:#f33">CONFIGURACIÓN</p>' +
-    '<p style="margin:8px 0 4px">API key de YouTube:</p>' +
-    '<input id="ak" style="margin-bottom:6px" autocomplete="off">' +
+    '<p style="margin:8px 0 4px">API keys de YouTube (separadas por coma):</p>' +
+    '<input id="ak" style="margin-bottom:6px" autocomplete="off" placeholder="key1, key2, ...">' +
     '<div style="display:flex;gap:6px">' +
     '<button id="akp" style="flex:1">Pegar</button>' +
-    '<button id="aks" style="flex:1">Guardar key</button>' +
+    '<button id="aks" style="flex:1">Guardar keys</button>' +
     '</div>' +
     '<hr style="border:0;border-top:1px solid #333;margin:12px 0">' +
     '<p style="margin:4px 0">Plantilla URL de descarga (ID se reemplaza):</p>' +
@@ -893,7 +1030,7 @@ async function openCfg() {
     '<button id="cl" style="min-width:100px">Cerrar</button>' +
     '</div>';
 
-  $('#ak').value = K;
+  $('#ak').value = rawKeys;
   $('#dlt').value = LS.dl || DEFAULT_DL;
   if (!window.Android && $('#importRes')) {
     $('#importRes').textContent = importMsg;
@@ -908,15 +1045,32 @@ async function openCfg() {
 
   $('#akp').onclick = async () => {
     try {
-      $('#ak').value = (await navigator.clipboard.readText()).trim();
+      const text = (await navigator.clipboard.readText()).trim();
+      if (!text) return;
+      const cur = $('#ak').value.trim();
+      $('#ak').value = cur ? cur + ', ' + text : text;
     } catch (e) {}
   };
 
-  $('#aks').onclick = () => {
-    K = $('#ak').value.trim();
-    LS.k = K;
+  $('#aks').onclick = async () => {
+    updateKeys($('#ak').value);
+    exhaustedKeys = {};
+    try {
+      localStorage.removeItem('bad_keys');
+      localStorage.removeItem('api_exhausted');
+    } catch (e) {}
+    apiExhaustedUntil = 0;
+    quotaOffline = false;
     apiCooldownUntil = 0;
-    if (K && !items.length && started) more();
+    if (apiKeys.length) {
+      if (off && lastPingSuccess && !waitingForLocalEnd) {
+        goOn();
+      } else if (!items.length && started) {
+        await more();
+      }
+    } else {
+      if (started && !off) await goOff();
+    }
   };
 
   $('#dlts').onclick = () => {
@@ -1002,7 +1156,9 @@ async function openCfg() {
               const toRemove = toDeleteCandidates[0];
               await dbDelete(toRemove.id);
               if (S[toRemove.id]) {
-                S[toRemove.id].d = 0;
+                delete S[toRemove.id].d;
+                delete S[toRemove.id].l;
+                delete S[toRemove.id].q;
               }
               savedVideos = savedVideos.filter(v => v.id !== toRemove.id);
             }
@@ -1084,34 +1240,221 @@ function strHash(str) {
 function seed() {
   qi++;
   if (qi % 3 === 0) {
-    const t = Object.values(S).filter(x => x.v > 0).sort((a, b) => b.v - a.v)[0];
-    if (t && t.t) return t.t;
+    const list = Object.values(S).filter(x => x && x.v > 0 && x.t);
+    if (list.length > 0) {
+      list.sort((a, b) => b.v - a.v);
+      return list[0].t;
+    }
   }
   return SEEDS[Math.random() * SEEDS.length | 0];
 }
 
+function isApiKeyFailure(res, j) {
+  if (!res) return false;
+  if (res.status === 429 || res.status === 403) return true;
+
+  const targetReasons = ['quotaexceeded', 'ratelimitexceeded', 'dailylimitexceeded', 'keyinvalid', 'api_key_invalid'];
+  if (j && j.error) {
+    const err = j.error;
+    const foundReasons = [];
+    if (Array.isArray(err.errors)) {
+      err.errors.forEach(e => {
+        if (e.reason) foundReasons.push(String(e.reason).toLowerCase());
+        if (e.message) foundReasons.push(String(e.message).toLowerCase());
+      });
+    }
+    if (Array.isArray(err.details)) {
+      err.details.forEach(d => {
+        if (d.reason) foundReasons.push(String(d.reason).toLowerCase());
+        if (d.message) foundReasons.push(String(d.message).toLowerCase());
+      });
+    }
+    if (err.message) foundReasons.push(String(err.message).toLowerCase());
+    if (err.status) foundReasons.push(String(err.status).toLowerCase());
+
+    if (foundReasons.some(r => targetReasons.some(tr => r.includes(tr)))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function handleAllKeysExhausted() {
+  setApiExhaustedFlag();
+  const saved = await getSavedVideos();
+  if (saved.length > 0) {
+    quotaOffline = true;
+    if (!off) {
+      await goOff();
+    }
+  } else {
+    quotaOffline = false;
+    if (items.length > 0) {
+      if (cur === -1 || cur >= items.length) {
+        play(0);
+      }
+    } else {
+      let cached = [];
+      try {
+        cached = JSON.parse(LS.last_yt_results || '[]');
+      } catch (e) {}
+      if (cached && cached.length > 0) {
+        items = cached.map(x => ({ id: x.id, t: x.t, th: x.m }));
+        renderYTList();
+        if (playerReady) play(0);
+      }
+    }
+  }
+}
+
+async function checkKeyWorks() {
+  let tested = 0;
+  for (let i = 0; i < apiKeys.length; i++) {
+    const k = apiKeys[i];
+    if (isKeyExhausted(k)) continue;
+    if (tested >= 3) break;
+    tested++;
+    try {
+      const testUrl = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=1&safeSearch=strict&q=caricaturas&key=' + encodeURIComponent(k);
+      const res = await fetch(testUrl);
+      const j = await res.json().catch(() => null);
+      if (isApiKeyFailure(res, j)) {
+        markKeyExhausted(k);
+        continue;
+      }
+      if (res.ok && j && j.items) {
+        delete exhaustedKeys[k];
+        try {
+          localStorage.setItem('bad_keys', JSON.stringify(exhaustedKeys));
+        } catch (e) {}
+        keyIndex = i;
+        K = k;
+        return true;
+      }
+    } catch (e) {}
+  }
+  return false;
+}
+
 // Búsqueda infinita en YouTube
 async function more() {
-  if (busy || !K || Date.now() < apiCooldownUntil || off) return;
+  if (busy || off || isApiExhausted()) return;
+  if (!apiKeys.length) {
+    await handleAllKeysExhausted();
+    return;
+  }
+  if (Date.now() < apiCooldownUntil) return;
   busy = true;
   try {
     if (!Q) {
       Q = seed();
       tok = '';
     }
-    const url = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=25&safeSearch=strict&videoEmbeddable=true&videoSyndicated=true&q=' +
-      encodeURIComponent(Q) + (tok ? '&pageToken=' + tok : '') + '&key=' + K;
-    const res = await fetch(url);
-    const j = await res.json();
-    if (j.error) {
-      apiCooldownUntil = Date.now() + 60000;
+
+    let data = null;
+    let ok = false;
+    const testedInCycle = new Set();
+
+    while (testedInCycle.size < apiKeys.length && !off) {
+      let candidateKey = null;
+      let candidateIndex = -1;
+
+      for (let offset = 0; offset < apiKeys.length; offset++) {
+        const idx = (keyIndex + offset) % apiKeys.length;
+        const k = apiKeys[idx];
+        if (!testedInCycle.has(k) && !isKeyExhausted(k)) {
+          candidateKey = k;
+          candidateIndex = idx;
+          break;
+        }
+      }
+
+      if (!candidateKey) {
+        for (let offset = 0; offset < apiKeys.length; offset++) {
+          const idx = (keyIndex + offset) % apiKeys.length;
+          const k = apiKeys[idx];
+          if (!testedInCycle.has(k)) {
+            candidateKey = k;
+            candidateIndex = idx;
+            break;
+          }
+        }
+      }
+
+      if (!candidateKey) break;
+
+      testedInCycle.add(candidateKey);
+      keyIndex = candidateIndex;
+      K = candidateKey;
+
+      if (!Q) {
+        Q = seed();
+        tok = '';
+      }
+      const queryTerm = Q || seed();
+      const url = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=25&safeSearch=strict&videoEmbeddable=true&videoSyndicated=true&q=' +
+        encodeURIComponent(queryTerm) + (tok ? '&pageToken=' + tok : '') + '&key=' + encodeURIComponent(candidateKey);
+
+      try {
+        const res = await fetch(url);
+        const j = await res.json().catch(() => null);
+
+        if (isApiKeyFailure(res, j)) {
+          console.warn('YouTube API quota/error on key #' + (keyIndex + 1));
+          markKeyExhausted(candidateKey);
+          continue;
+        }
+
+        if (res.status === 400) {
+          tok = '';
+          const retryQuery = Q || seed();
+          const retryUrl = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=25&safeSearch=strict&videoEmbeddable=true&videoSyndicated=true&q=' +
+            encodeURIComponent(retryQuery) + '&key=' + encodeURIComponent(candidateKey);
+          const r2 = await fetch(retryUrl);
+          const j2 = await r2.json().catch(() => null);
+
+          if (isApiKeyFailure(r2, j2)) {
+            markKeyExhausted(candidateKey);
+            continue;
+          }
+
+          if (!r2.ok || !j2) {
+            Q = seed();
+            tok = '';
+            break;
+          }
+
+          data = j2;
+          ok = true;
+          break;
+        }
+
+        if (!res.ok || !j) {
+          break;
+        }
+
+        data = j;
+        ok = true;
+        break;
+      } catch (err) {
+        break;
+      }
+    }
+
+    if (!ok || !data) {
+      if (testedInCycle.size >= apiKeys.length || apiKeys.every(k => isKeyExhausted(k))) {
+        await handleAllKeysExhausted();
+      } else {
+        apiCooldownUntil = Date.now() + 30000;
+      }
       return;
     }
-    tok = j.nextPageToken || '';
+
+    tok = data.nextPageToken || '';
     if (!tok) Q = '';
     let n = 0;
-    for (const it of j.items || []) {
-      const id = it.id.videoId;
+    for (const it of data.items || []) {
+      const id = it.id && it.id.videoId;
       if (!id || seen.has(id)) continue;
       seen.add(id);
       n++;
@@ -1125,12 +1468,22 @@ async function more() {
         card(o, items.length - 1);
       }
     }
+
+    try {
+      const toSave = items.slice(0, 200).map(x => ({
+        id: x.id,
+        t: x.t,
+        m: x.th
+      }));
+      localStorage.setItem('last_yt_results', JSON.stringify(toSave));
+    } catch (e) {}
+
     if (started && cur === -1 && playerReady && items.length > 0 && !off) {
       play(0);
     }
     if (!n && tok) setTimeout(more, 300);
   } catch (e) {
-    apiCooldownUntil = Date.now() + 60000;
+    apiCooldownUntil = Date.now() + 30000;
   } finally {
     busy = false;
     setTimeout(near, 400);
@@ -1199,14 +1552,29 @@ async function next() {
   lastTime = -1;
   secs = 0;
   if (cur + 1 >= items.length) {
-    if (K) {
+    if (apiKeys.length && !isApiExhausted()) {
       await more();
     }
   }
   if (cur + 1 < items.length) {
     play(cur + 1);
-  } else if (items.length > 0) {
-    play(0);
+  } else {
+    const saved = await getSavedVideos();
+    if (saved.length > 0) {
+      await goOff();
+    } else if (items.length > 0) {
+      play(0);
+    } else {
+      let cached = [];
+      try {
+        cached = JSON.parse(LS.last_yt_results || '[]');
+      } catch (e) {}
+      if (cached && cached.length > 0) {
+        items = cached.map(x => ({ id: x.id, t: x.t, th: x.m }));
+        renderYTList();
+        play(0);
+      }
+    }
   }
 }
 
@@ -1299,8 +1667,7 @@ function fav(id, t, targetEl) {
         sv();
 
         try {
-          const template = LS.dl || DEFAULT_DL;
-          const url = template.replace('ID', id);
+          const url = getDownloadUrl(id);
 
           const a = document.createElement('a');
           a.style.display = 'none';
@@ -1350,8 +1717,7 @@ async function checkDownloadQueue() {
   lastLaunchTime = now;
 
   try {
-    const template = LS.dl || DEFAULT_DL;
-    const url = template.replace('ID', id);
+    const url = getDownloadUrl(id);
 
     const frame = $('#dlFrame');
     if (frame) {
@@ -1406,7 +1772,26 @@ async function net() {
         loadYT();
       }
       if (off && !waitingForLocalEnd) {
-        goOn();
+        if (quotaOffline) {
+          if (!isApiExhausted() && !testingKey) {
+            testingKey = true;
+            checkKeyWorks().then(works => {
+              testingKey = false;
+              if (works) {
+                quotaOffline = false;
+                apiExhaustedUntil = 0;
+                try { localStorage.removeItem('api_exhausted'); } catch (e) {}
+                goOn();
+              } else {
+                setApiExhaustedFlag();
+              }
+            }).catch(() => {
+              testingKey = false;
+            });
+          }
+        } else {
+          goOn();
+        }
       }
     } else {
       lastPingSuccess = false;
@@ -1426,14 +1811,32 @@ async function net() {
 }
 
 setInterval(net, 1000);
-window.addEventListener('offline', () => { goOff(); });
-window.addEventListener('online', () => { net(); });
+window.addEventListener('offline', () => { if (started) goOff(); });
+window.addEventListener('online', () => { if (started) net(); });
 
 // Vigilante cada 3 segundos: recuperación de conexión y arranque pendiente
-setInterval(() => {
+setInterval(async () => {
   if (started && !off && lastPingSuccess) {
-    if (!items.length && K) {
-      more();
+    if (!items.length) {
+      if (apiKeys.length && !isApiExhausted()) {
+        await more();
+      }
+      if (!items.length && !off) {
+        const saved = await getSavedVideos();
+        if (saved.length > 0) {
+          await goOff();
+        } else {
+          let cached = [];
+          try {
+            cached = JSON.parse(LS.last_yt_results || '[]');
+          } catch (e) {}
+          if (cached && cached.length > 0) {
+            items = cached.map(x => ({ id: x.id, t: x.t, th: x.m }));
+            renderYTList();
+            if (P && playerReady) play(0);
+          }
+        }
+      }
     } else if (items.length && P) {
       const st = (typeof P.getPlayerState === 'function') ? P.getPlayerState() : -1;
       if (cur === -1 || ((st === -1 || st === 5) && cur >= 0)) {
@@ -1582,9 +1985,24 @@ async function finishGoOn() {
 
   if (items.length > 0) {
     next();
-  } else if (K) {
+  } else if (apiKeys.length && !isApiExhausted()) {
     await more();
     if (items.length > 0) play(0);
+  } else {
+    const saved = await getSavedVideos();
+    if (saved.length > 0) {
+      await goOff();
+    } else {
+      let cached = [];
+      try {
+        cached = JSON.parse(LS.last_yt_results || '[]');
+      } catch (e) {}
+      if (cached && cached.length > 0) {
+        items = cached.map(x => ({ id: x.id, t: x.t, th: x.m }));
+        renderYTList();
+        play(0);
+      }
+    }
   }
 }
 
@@ -1657,41 +2075,16 @@ setInterval(() => {
   }
 }, 1000);
 
-// Errores YouTube
-function handleVideoError() {
-  consecutiveErrors++;
-  if (consecutiveErrors >= 5) {
-    clearTimeout(errorTimer);
-    errorTimer = setTimeout(() => {
-      consecutiveErrors = 0;
-      next();
-    }, 3000);
-  } else {
-    next();
-  }
-}
-
-// Reanudar a los 250 ms si se pausa
-function ensurePlaying() {
-  if (off) return;
-  clearTimeout(resumeTimer);
-  resumeTimer = setTimeout(() => {
-    if (!off && P && P.playVideo) {
-      const s = P.getPlayerState ? P.getPlayerState() : -1;
-      if (s === 2 || s === -1 || s === 5) {
-        P.playVideo();
-      }
-    }
-  }, 250);
-}
-
-// Vigilante de atasco en YouTube
+// Vigilante de atasco y pausa en YouTube
 setInterval(() => {
-  if (off || !started || cur < 0 || !P || !P.getPlayerState || !P.getCurrentTime) return;
+  if (off || !started || cur < 0 || !P || !P.getPlayerState) return;
   const state = P.getPlayerState();
+  if (state === 2 || state === -1 || state === 5) {
+    ensurePlaying();
+  }
   if (state === 1 || state === 3 || state === 2 || state === -1) {
     let ct = -1;
-    try { ct = P.getCurrentTime(); } catch(e) {}
+    try { ct = P.getCurrentTime ? P.getCurrentTime() : -1; } catch(e) {}
     if (ct >= 0 && Math.abs(ct - lastTime) < 0.25) {
       if (navigator.onLine) {
         stuckSeconds++;
@@ -1733,7 +2126,8 @@ setInterval(() => {
 }, 300000);
 
 // Pantalla inicial
-$('#start-btn').onclick = async () => {
+async function startApp() {
+  if (started) return;
   started = true;
   $('#start-screen').style.display = 'none';
 
@@ -1746,8 +2140,7 @@ $('#start-btn').onclick = async () => {
   await requestWakeLock();
 
   if (off) {
-    const v = $('#off');
-    if (v && v.src) v.play().catch(() => {});
+    offPlay();
     return;
   }
 
@@ -1756,6 +2149,7 @@ $('#start-btn').onclick = async () => {
   if (isNet) {
     lastPingSuccess = true;
     apiCooldownUntil = 0;
+    if (!window.YT) loadYT();
   } else {
     lastPingSuccess = false;
     const saved = await getSavedVideos();
@@ -1765,19 +2159,54 @@ $('#start-btn').onclick = async () => {
     }
   }
 
-  if (K && !items.length) {
+  if (apiKeys.length && !items.length && !isApiExhausted()) {
     await more();
   }
 
-  if (playerReady && items.length > 0 && cur === -1 && !off) {
-    play(0);
+  if (!off) {
+    if (items.length > 0) {
+      play(cur >= 0 ? cur : 0);
+    } else {
+      const saved = await getSavedVideos();
+      if (saved.length > 0) {
+        await goOff();
+      } else {
+        let cached = [];
+        try {
+          cached = JSON.parse(LS.last_yt_results || '[]');
+        } catch (e) {}
+        if (cached && cached.length > 0) {
+          items = cached.map(x => ({ id: x.id, t: x.t, th: x.m }));
+          renderYTList();
+          play(0);
+        }
+      }
+    }
   }
-};
+}
+
+$('#start-btn').onclick = startApp;
+$('#start-screen').onclick = startApp;
 
 // Carga inicial
 loadYT();
-if (K) {
+if (apiKeys.length && !isApiExhausted()) {
   more();
+} else {
+  getSavedVideos().then(saved => {
+    if (saved && saved.length > 0 && !items.length) {
+      if (started) goOff();
+    } else {
+      let cached = [];
+      try {
+        cached = JSON.parse(LS.last_yt_results || '[]');
+      } catch (e) {}
+      if (cached && cached.length > 0 && !items.length) {
+        items = cached.map(x => ({ id: x.id, t: x.t, th: x.m }));
+        renderYTList();
+      }
+    }
+  });
 }
 </script>
 </body>

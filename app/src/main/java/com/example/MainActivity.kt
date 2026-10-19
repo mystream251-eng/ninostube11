@@ -16,6 +16,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.RenderProcessGoneDetail
 import androidx.activity.ComponentActivity
 import androidx.webkit.ServiceWorkerClientCompat
 import androidx.webkit.ServiceWorkerControllerCompat
@@ -444,7 +445,8 @@ class MainActivity : ComponentActivity() {
       .addPathHandler("/assets/", safeHandler)
       .build()
 
-    fun handleRequest(url: Uri): WebResourceResponse? {
+    fun handleRequest(request: WebResourceRequest): WebResourceResponse? {
+      val url = request.url
       if (url.host == "appassets.androidplatform.net") {
         val path = url.path ?: ""
         if (path.isEmpty() || path == "/" || path == "/assets" || path == "/assets/") {
@@ -454,14 +456,45 @@ class MainActivity : ComponentActivity() {
           val filename = path.removePrefix("/videos/")
           val file = File(videosDir, filename)
           if (file.exists()) {
-            return WebResourceResponse("video/mp4", null, file.inputStream())
+            val totalLength = file.length()
+            val rangeHeader = request.requestHeaders?.get("Range")
+            if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+              try {
+                val rangeParts = rangeHeader.removePrefix("bytes=").split("-")
+                val start = rangeParts.getOrNull(0)?.toLongOrNull() ?: 0L
+                val end = rangeParts.getOrNull(1)?.toLongOrNull() ?: (totalLength - 1)
+                val contentLength = end - start + 1
+                val fis = file.inputStream()
+                fis.skip(start)
+                val headers = mutableMapOf(
+                  "Content-Range" to "bytes $start-$end/$totalLength",
+                  "Accept-Ranges" to "bytes",
+                  "Content-Length" to contentLength.toString(),
+                  "Access-Control-Allow-Origin" to "*"
+                )
+                return WebResourceResponse("video/mp4", null, 206, "Partial Content", headers, fis)
+              } catch (_: Exception) {
+                return WebResourceResponse("video/mp4", null, file.inputStream())
+              }
+            } else {
+              val headers = mutableMapOf(
+                "Accept-Ranges" to "bytes",
+                "Content-Length" to totalLength.toString(),
+                "Access-Control-Allow-Origin" to "*"
+              )
+              return WebResourceResponse("video/mp4", null, 200, "OK", headers, file.inputStream())
+            }
           }
         }
         if (path.startsWith("/thumbs/")) {
           val filename = path.removePrefix("/thumbs/")
           val file = File(thumbsDir, filename)
           if (file.exists()) {
-            return WebResourceResponse("image/jpeg", null, file.inputStream())
+            val headers = mutableMapOf(
+              "Content-Length" to file.length().toString(),
+              "Access-Control-Allow-Origin" to "*"
+            )
+            return WebResourceResponse("image/jpeg", null, 200, "OK", headers, file.inputStream())
           }
         }
       }
@@ -472,7 +505,7 @@ class MainActivity : ComponentActivity() {
       try {
         ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(object : ServiceWorkerClientCompat() {
           override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
-            return handleRequest(request.url)
+            return handleRequest(request)
           }
         })
       } catch (_: Exception) {
@@ -487,6 +520,12 @@ class MainActivity : ComponentActivity() {
       )
       setBackgroundColor(android.graphics.Color.BLACK)
 
+      try {
+        val cookieManager = android.webkit.CookieManager.getInstance()
+        cookieManager.setAcceptCookie(true)
+        cookieManager.setAcceptThirdPartyCookies(this, true)
+      } catch (_: Exception) {}
+
       settings.apply {
         javaScriptEnabled = true
         domStorageEnabled = true
@@ -497,6 +536,7 @@ class MainActivity : ComponentActivity() {
         mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         useWideViewPort = true
         loadWithOverviewMode = true
+        cacheMode = WebSettings.LOAD_DEFAULT
       }
 
       addJavascriptInterface(AndroidBridge(this@MainActivity), "Android")
@@ -506,12 +546,32 @@ class MainActivity : ComponentActivity() {
           view: WebView,
           request: WebResourceRequest
         ): WebResourceResponse? {
-          return handleRequest(request.url)
+          return handleRequest(request)
+        }
+
+        override fun onRenderProcessGone(
+          view: WebView,
+          detail: RenderProcessGoneDetail
+        ): Boolean {
+          Log.w(TAG, "WebView render process gone. Crashed: ${detail.didCrash()}")
+          return true
+        }
+
+        override fun onReceivedError(
+          view: WebView,
+          request: WebResourceRequest,
+          error: android.webkit.WebResourceError
+        ) {
+          super.onReceivedError(view, request, error)
+          Log.w(TAG, "WebView resource error [${error.errorCode}]: ${error.description} on ${request.url}")
         }
       }
 
       webChromeClient = object : WebChromeClient() {
         override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+          consoleMessage?.let {
+            Log.d("WebConsole", "[${it.messageLevel()}] ${it.message()} (${it.sourceId()}:${it.lineNumber()})")
+          }
           return super.onConsoleMessage(consoleMessage)
         }
       }
